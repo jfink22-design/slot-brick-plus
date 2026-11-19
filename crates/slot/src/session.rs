@@ -54,7 +54,11 @@ impl Session {
             root,
             emu: None,
             sink,
-            gestures: if cfg!(feature = "brick") { Gestures::brick() } else { Gestures::new() },
+            gestures: if cfg!(feature = "brick") {
+                Gestures::brick()
+            } else {
+                Gestures::new()
+            },
             prefetch: Prefetch::default(),
             pad: Pad::default(),
             rewinding: false,
@@ -74,7 +78,8 @@ impl Session {
         }
         let mut samples = sfx.render(rate);
         // The volume, and System Sounds' own on top of it, in one pass.
-        let gain = crate::audio::volume::gain(self.app.output_volume()) * crate::audio::volume::gain(self.app.sound_volume());
+        let gain = crate::audio::volume::gain(self.app.output_volume())
+            * crate::audio::volume::gain(self.app.sound_volume());
         for s in samples.iter_mut() {
             *s = (*s as f32 * gain) as i16;
         }
@@ -219,7 +224,11 @@ impl Session {
     fn act(&mut self, action: Action) {
         // Keep the existing Select+B shortcut as an alias on Brick.
         #[cfg(feature = "brick")]
-        let action = if action == Action::ShaderPrev { Action::LedToggle } else { action };
+        let action = if action == Action::ShaderPrev {
+            Action::LedToggle
+        } else {
+            action
+        };
         if trace() {
             eprintln!("slot: {action:?} in {:?}", self.app.phase());
         }
@@ -269,6 +278,9 @@ impl Session {
                     crate::badge::path(&self.root, &url)
                 });
                 self.app.achievement_notice(notice, badge);
+            }
+            if let Some(regions) = emu.mission_regions() {
+                self.app.note_mission_regions(&regions);
             }
         }
         if let Some((client_id, transport)) = self.app.take_link_transport() {
@@ -522,7 +534,10 @@ impl Session {
         let emu = EmuHandle::spawn_game(opened.core, rom, unpack_into, ring, sav, resume, linked);
         emu.set_volume(self.app.output_volume());
         if platform == Platform::Ps1 {
-            emu.set_option("pcsx_rearmed_dithering", crate::core::dithering(self.app.ps1_dithering()));
+            emu.set_option(
+                "pcsx_rearmed_dithering",
+                crate::core::dithering(self.app.ps1_dithering()),
+            );
         }
         // The SNES and PlayStation pads have X and Y of their own: no turbo on them.
         emu.set_native_xy(matches!(platform, Platform::Snes | Platform::Ps1));

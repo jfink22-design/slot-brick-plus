@@ -2980,10 +2980,52 @@ impl App {
 
     fn open_pip(&mut self) {
         self.videos_visible = false;
+        self.install_goals();
         let games = self.games_seen();
         self.companion.ensure_missions(&games, self.local_day());
         self.companion.refresh_suggestion(&games, self.local_day());
         self.pip = Some(crate::pip::PipMenu::open());
+    }
+
+    /// Hand-authored goals, plus any mined from cached RetroAchievements sets.
+    fn install_goals(&mut self) -> bool {
+        if self.companion.goals_ready() {
+            return false;
+        }
+        let Some(root) = self.root.clone() else {
+            return false;
+        };
+        let (book, auto) = slot_store::load_goal_book(&root);
+        self.companion.set_goals(book, auto as u32);
+        true
+    }
+
+    /// Live mission check from the emulator's RAM. Offline: the condition is already on the card.
+    pub fn note_mission_regions(&mut self, regions: &[(u32, Vec<u8>)]) {
+        let Phase::Playing { cart } = &self.phase else {
+            return;
+        };
+        if !self.companion.enabled {
+            return;
+        }
+        let stem = cart.clone();
+        let platform = self.platform;
+        let day = self.local_day();
+        if self.install_goals() {
+            let games = self.games_seen();
+            self.companion.ensure_missions(&games, day);
+        }
+        let view: Vec<(u32, &[u8])> = regions.iter().map(|(at, bytes)| (*at, bytes.as_slice())).collect();
+        let awards = self.companion.note_regions(platform, &stem, &view, day);
+        if awards.is_empty() {
+            return;
+        }
+        if self.companion.toasts {
+            for award in &awards {
+                self.announce(&award.title, &award.detail);
+            }
+        }
+        self.save_companion();
     }
 
     fn launch_pip(&mut self, platform: Platform, stem: String) {

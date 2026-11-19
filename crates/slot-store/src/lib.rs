@@ -7,6 +7,7 @@ mod core;
 pub mod gb;
 mod gb_palette;
 mod gba;
+mod goals;
 pub mod ini;
 pub mod library;
 mod overlay;
@@ -22,21 +23,27 @@ mod thumbs;
 
 pub use atomic::{atomic_write, free_space};
 pub use cart_shell::{Outline, ShellChoice, ShellFinish, CART_SHELL_FILE, LABELS_SHELL_FILE};
+pub use companion::{
+    Companion, GameSeen, GameStreak, Mission, MissionKind, Mood, FILE as COMPANION_FILE,
+};
 pub use config::{move_config, CONFIG_DIR};
 pub use core::{
     core_for, core_for_platform, read_selected_cores, write_selected_core, Core, SELECTED_CORE_FILE,
 };
 pub use gb_palette::GbPalette;
 pub use gba::{header_clean, header_code, header_title, header_title_code};
-pub use overlay::{overlay_name_ok, overlays, overlays_dir, step_overlay, OVERLAYS_DIR};
-pub use companion::{Companion, GameSeen, Mission, MissionKind, Mood, FILE as COMPANION_FILE};
+pub use goals::{goals_from_set, hand_game_count, hand_goals, load_goal_book, GoalOffer};
 pub use library::{arrange, played_text, GameRecord, Library, LibrarySort, LIBRARY_FILE};
+pub use overlay::{overlay_name_ok, overlays, overlays_dir, step_overlay, OVERLAYS_DIR};
 pub use platform::Platform;
 pub use ring::{StateEntry, StateRing, RING_MAX};
-pub use scan::{initial, is_hidden, labels_of, listing, scan, sort_key, Cart, StoreError, FAMICOM_LABELS};
+pub use scan::{
+    initial, is_hidden, labels_of, listing, scan, sort_key, Cart, StoreError, FAMICOM_LABELS,
+};
 pub use slot_state::{
-    read_slot_state, write_slot_state, Shader, SlotState, BLUE_LIGHT_MAX, BRIGHTNESS_MAX,
-    AUTOSAVE_MINS, AUTOSAVE_MIN_DEFAULT, BATTERY_SHUTDOWNS, BATTERY_SHUTDOWN_DEFAULT, FF_SPEEDS, FF_SPEED_DEFAULT, SOUND_VOLUME_STEP, UTC_OFFSET_MAX, UTC_OFFSET_MIN, VOLUME_MAX,
+    read_slot_state, write_slot_state, Shader, SlotState, AUTOSAVE_MINS, AUTOSAVE_MIN_DEFAULT,
+    BATTERY_SHUTDOWNS, BATTERY_SHUTDOWN_DEFAULT, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, FF_SPEEDS,
+    FF_SPEED_DEFAULT, SOUND_VOLUME_STEP, UTC_OFFSET_MAX, UTC_OFFSET_MIN, VOLUME_MAX,
 };
 pub use stamp::{
     civil_from_days, days_from_civil, days_in_month, format_stamp, parse_stamp, stamp_now,

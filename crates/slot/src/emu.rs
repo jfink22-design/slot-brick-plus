@@ -119,6 +119,10 @@ struct Shared {
     cheevos_notices: Mutex<Vec<slot_cheevos::Notice>>,
     /// The loaded game's badge URLs, to fetch before any unlock needs one.
     cheevos_badges: Mutex<Vec<String>>,
+    /// RAM blocks for Pip's missions, each at the address the core published.
+    mission_regions: Mutex<Vec<(u32, Vec<u8>)>>,
+    mission_fresh: AtomicBool,
+    mission_tick: AtomicU32,
 }
 
 #[derive(Default)]
@@ -207,6 +211,9 @@ impl EmuHandle {
             cheevos_login: Mutex::new(None),
             cheevos_notices: Mutex::new(Vec::new()),
             cheevos_badges: Mutex::new(Vec::new()),
+            mission_regions: Mutex::new(Vec::new()),
+            mission_fresh: AtomicBool::new(false),
+            mission_tick: AtomicU32::new(0),
         });
         let (tx, rx) = channel();
         let worker = Worker {
@@ -253,6 +260,24 @@ impl EmuHandle {
 
     pub fn take_achievement_notices(&self) -> Vec<slot_cheevos::Notice> {
         std::mem::take(&mut *self.shared.cheevos_notices.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// The latest RAM snapshot, once. Empty until the core has published memory.
+    pub fn mission_regions(&self) -> Option<Vec<(u32, Vec<u8>)>> {
+        if !self.shared.mission_fresh.swap(false, Ordering::AcqRel) {
+            return None;
+        }
+        let regions = self
+            .shared
+            .mission_regions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if regions.is_empty() {
+            None
+        } else {
+            Some(regions)
+        }
     }
 
     pub fn net(&self) -> &Link {
@@ -817,6 +842,9 @@ impl Worker {
                     if let Some(c) = &cheevos {
                         c.frame();
                     }
+                    if last {
+                        snapshot_mission_ram(&self.shared, core.as_mut());
+                    }
                     let took = frame_began.elapsed();
                     if last {
                         drawn = took;
@@ -1111,6 +1139,97 @@ impl Worker {
     fn speed(&self) -> Speed {
         Speed::from_u8(self.shared.speed.load(Ordering::Relaxed))
     }
+}
+
+/// Copy the core's system RAM every half second or so. Addresses stay the ones
+/// the core published, so a condition can read work RAM without a flat 8MB image.
+fn snapshot_mission_ram(shared: &Shared, core: &mut dyn RetroCore) {
+    let n = shared.mission_tick.fetch_add(1, Ordering::Relaxed);
+    if n % 30 != 0 {
+        return;
+    }
+    let regions = mission_image(core);
+    if regions.is_empty() {
+        return;
+    }
+    *shared
+        .mission_regions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = regions;
+    shared.mission_fresh.store(true, Ordering::Release);
+}
+
+#[repr(C)]
+struct RetroMemDesc {
+    flags: u64,
+    ptr: *mut u8,
+    offset: usize,
+    start: usize,
+    select: usize,
+    disconnect: usize,
+    len: usize,
+    _addrspace: *const i8,
+}
+
+fn mission_image(core: &mut dyn RetroCore) -> Vec<(u32, Vec<u8>)> {
+    const SYSTEM_RAM: u64 = 1 << 2;
+    const CONST: u64 = 1 << 0;
+    const MAX_REGION: usize = 256 * 1024;
+    const MAX_TOTAL: usize = 512 * 1024;
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    let (ptr, count) = core.memory_map();
+    if !ptr.is_null() && count > 0 && count < 256 {
+        let descs = unsafe {
+            std::slice::from_raw_parts(ptr as *const RetroMemDesc, count as usize)
+        };
+        for desc in descs {
+            if desc.ptr.is_null() || desc.len == 0 || desc.start > u32::MAX as usize {
+                continue;
+            }
+            let ram = desc.flags & SYSTEM_RAM != 0;
+            let rom = desc.flags & CONST != 0;
+            if !ram && rom {
+                continue;
+            }
+            if !ram && desc.len > MAX_REGION {
+                continue;
+            }
+            let n = desc.len.min(MAX_REGION).min(MAX_TOTAL.saturating_sub(total));
+            if n == 0 {
+                break;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(desc.ptr, n) }.to_vec();
+            total += n;
+            out.push((desc.start as u32, bytes));
+            if out.len() == 16 {
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some((ptr, len)) = core.memory_region(2) {
+            if !ptr.is_null() && len > 0 {
+                let n = len.min(MAX_REGION);
+                let bytes = unsafe { std::slice::from_raw_parts(ptr, n) }.to_vec();
+                out.push((0, bytes));
+            }
+        }
+    }
+    // RetroAchievements addresses GBA IWRAM at 0 and EWRAM at 0x8000, while the
+    // core publishes the physical bus addresses. Keep both so a condition can use
+    // the RA address.
+    let aliases: Vec<(u32, Vec<u8>)> = out
+        .iter()
+        .filter_map(|(start, bytes)| match *start {
+            0x0300_0000 if bytes.len() <= 0x8000 => Some((0, bytes.clone())),
+            0x0200_0000 if bytes.len() <= 0x4_0000 => Some((0x8000, bytes.clone())),
+            0x8000_0000 if bytes.len() >= 0x20_0000 => Some((0, bytes[..0x20_0000].to_vec())),
+            _ => None,
+        })
+        .collect();
+    out.extend(aliases);
+    out
 }
 
 fn flush_outbound(transport: &mut Option<Box<dyn LinkChannel>>, link: &Link) {

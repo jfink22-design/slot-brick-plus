@@ -15,6 +15,7 @@
 #include "rc_error.h"
 #include "rc_api_runtime.h"
 #include "rc_api_user.h"
+#include "rc_runtime_types.h"
 
 typedef void (*slot_http_fn)(void* host, const char* url, const char* post_data,
                              const char* content_type, void* call);
@@ -395,4 +396,126 @@ int slot_cheevos_session_body(char* out, size_t cap, const char* user, const cha
   if (rc_api_init_start_session_request(&request, &params) != RC_OK)
     return -1;
   return copy_post(&request, out, cap);
+}
+
+/* One-shot check of a RetroAchievements memory condition against a RAM snapshot.
+ * Used for Pip's offline missions. Returns 1 when the condition parsed. */
+typedef struct slot_span {
+  uint32_t start;
+  const unsigned char* data;
+  uint32_t len;
+} slot_span;
+
+typedef struct slot_map {
+  const slot_span* spans;
+  unsigned count;
+} slot_map;
+
+static uint32_t RC_CCONV slot_peek(uint32_t address, uint32_t num_bytes, void* ud) {
+  slot_map* map = (slot_map*)ud;
+  unsigned s, i;
+  uint32_t value = 0;
+  if (!map || num_bytes == 0 || num_bytes > 4)
+    return 0;
+  for (s = 0; s < map->count; s++) {
+    const slot_span* span = &map->spans[s];
+    uint32_t off;
+    if (!span->data || address < span->start)
+      continue;
+    off = address - span->start;
+    if (off >= span->len || num_bytes > span->len - off)
+      continue;
+    for (i = 0; i < num_bytes; i++)
+      value |= ((uint32_t)span->data[off + i]) << (8 * i);
+    return value;
+  }
+  return 0;
+}
+
+static int measure_spans(const char* memaddr, const slot_span* spans, unsigned count,
+                         unsigned* value, unsigned* target, int* triggered) {
+  int size;
+  void* buffer;
+  rc_trigger_t* trigger;
+  slot_map view;
+  if (!memaddr || !memaddr[0] || !value || !target || !triggered)
+    return 0;
+  *value = 0;
+  *target = 0;
+  *triggered = 0;
+  size = rc_trigger_size(memaddr);
+  if (size < 0)
+    return 0;
+  buffer = malloc((size_t)size);
+  if (!buffer)
+    return 0;
+  trigger = rc_parse_trigger(buffer, memaddr, NULL, 0);
+  if (!trigger) {
+    free(buffer);
+    return 0;
+  }
+  view.spans = spans;
+  view.count = count;
+  *triggered = rc_test_trigger(trigger, slot_peek, &view, NULL);
+  *value = trigger->measured_value;
+  *target = trigger->measured_target;
+  free(buffer);
+  return 1;
+}
+
+int slot_cheevos_measure(const char* memaddr, const unsigned char* ram, unsigned len,
+                         unsigned* value, unsigned* target, int* triggered) {
+  slot_span span;
+  span.start = 0;
+  span.data = ram ? ram : (const unsigned char*)"";
+  span.len = ram ? len : 0;
+  return measure_spans(memaddr, &span, 1, value, target, triggered);
+}
+
+int slot_cheevos_measure_map(const char* memaddr, const slot_span* spans, unsigned count,
+                             unsigned* value, unsigned* target, int* triggered) {
+  return measure_spans(memaddr, spans, count, value, target, triggered);
+}
+
+/* Compare `prev` with `now` on one trigger, so a delta (`d0x`) sees the real previous
+ * value. Two settles on `prev` clear the "changed" flag before `now` is read. */
+int slot_cheevos_measure_delta(const char* memaddr, const slot_span* prev, unsigned prev_count,
+                               const slot_span* now, unsigned now_count, unsigned* value,
+                               unsigned* target, int* triggered) {
+  int size;
+  void* buffer;
+  rc_trigger_t* trigger;
+  slot_map view;
+  if (!memaddr || !memaddr[0] || !now || !value || !target || !triggered)
+    return 0;
+  *value = 0;
+  *target = 0;
+  *triggered = 0;
+  size = rc_trigger_size(memaddr);
+  if (size < 0)
+    return 0;
+  buffer = malloc((size_t)size);
+  if (!buffer)
+    return 0;
+  trigger = rc_parse_trigger(buffer, memaddr, NULL, 0);
+  if (!trigger) {
+    free(buffer);
+    return 0;
+  }
+  trigger->state = RC_TRIGGER_STATE_ACTIVE;
+  if (prev && prev_count) {
+    view.spans = prev;
+    view.count = prev_count;
+    rc_evaluate_trigger(trigger, slot_peek, &view, NULL);
+    trigger->state = RC_TRIGGER_STATE_ACTIVE;
+    rc_evaluate_trigger(trigger, slot_peek, &view, NULL);
+    trigger->state = RC_TRIGGER_STATE_ACTIVE;
+  }
+  view.spans = now;
+  view.count = now_count;
+  *triggered = rc_evaluate_trigger(trigger, slot_peek, &view, NULL) == RC_TRIGGER_STATE_TRIGGERED;
+  *value = trigger->measured_value;
+  *target = trigger->measured_target;
+  free(buffer);
+  return 1;
 }

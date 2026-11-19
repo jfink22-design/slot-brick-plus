@@ -2020,6 +2020,7 @@ dependencies = [
  "flate2",
  "libc",
  "sevenz-rust2",
+ "slot-cheevos",
  "tempfile",
  "unicode-normalization",
 ]

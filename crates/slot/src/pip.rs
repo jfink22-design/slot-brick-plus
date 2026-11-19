@@ -22,6 +22,7 @@ pub struct PipLaunch {
 enum Page {
     Main,
     History,
+    Streaks,
     Settings,
 }
 
@@ -117,6 +118,10 @@ impl PipMenu {
                     pip.refresh_suggestion(games, day);
                 }
             }
+            Action::GbaDown(Btn::R1) | Action::ShelfRight if self.page == Page::Main => {
+                self.page = Page::Streaks;
+                self.row = 0;
+            }
             Action::GbaDown(Btn::A) => self.confirm(pip, games, day),
             _ => {}
         }
@@ -144,13 +149,18 @@ impl PipMenu {
                 } else if self.row == n + 1 {
                     self.page = Page::History;
                     self.row = 0;
+                } else if self.row == n + 2 {
+                    self.page = Page::Streaks;
+                    self.row = 0;
+                } else if self.row == n + 3 {
+                    let _ = pip.refresh_missions(games, day);
                 } else {
                     self.page = Page::Settings;
                     self.row = 0;
                 }
             }
             Page::Settings => self.settings(pip, games, day),
-            Page::History => {}
+            Page::History | Page::Streaks => {}
         }
     }
 
@@ -178,8 +188,8 @@ impl PipMenu {
 
     fn rows(&self, pip: &Companion) -> usize {
         match self.page {
-            Page::Main => pip.active().count() + 3,
-            Page::History => 1,
+            Page::Main => pip.active().count() + 5,
+            Page::History | Page::Streaks => 1,
             Page::Settings => 4 + MissionKind::ALL.len() + 1,
         }
         .max(1)
@@ -198,6 +208,7 @@ impl PipMenu {
         match self.page {
             Page::Main => self.render_main(&mut sheet, pip, day, hour, games, frame, w),
             Page::History => self.render_history(&mut sheet, pip, w),
+            Page::Streaks => self.render_streaks(&mut sheet, pip, w),
             Page::Settings => self.render_settings(&mut sheet, pip, w),
         }
         sheet.finish()
@@ -220,11 +231,16 @@ impl PipMenu {
         let text_x = 16 + size;
         sheet.text(
             &format!(
-                "{}   L{} {}/{}",
+                "{}   L{} {}/{}{}",
                 pip.say(day, hour, games),
                 pip.level(),
                 pip.toward_next(),
-                pip.next_cost()
+                pip.next_cost(),
+                if pip.ribbon > 0 {
+                    format!("  Ribbon {}", pip.ribbon)
+                } else {
+                    String::new()
+                }
             ),
             text_x,
             28,
@@ -240,14 +256,16 @@ impl PipMenu {
             if row == self.row {
                 sheet.rect(0, y, OUT_W, ROW_H, slot_ui::edge());
             }
-            let name = if !mission.stem.is_empty() {
+            let name = if mission.kind == MissionKind::Goal {
+                format!("{} · {}", mission.title, mission.stem)
+            } else if !mission.stem.is_empty() {
                 format!("{} · {}", mission.kind.plain(), mission.stem)
             } else if let Some(platform) = mission.platform {
                 format!("{} · {}", mission.kind.plain(), platform.name())
             } else {
                 mission.kind.plain().to_string()
             };
-            let (done, goal) = if mission.need >= 60 {
+            let (done, goal) = if mission.kind != MissionKind::Goal && mission.need >= 60 {
                 (mission.progress.min(mission.need) / 60, mission.need / 60)
             } else {
                 (mission.progress.min(mission.need), mission.need)
@@ -277,18 +295,25 @@ impl PipMenu {
         sheet.text(&suggest, 16, y, w, ROW_H, ROW_PX, false);
         y += pitch;
         row += 1;
-        for (label, at) in [("History", row), ("Settings", row + 1)] {
+        let refresh = format!("Refresh missions ({} left)", pip.rerolls_left(day));
+        let labels = [
+            ("History".to_string(), row),
+            ("Streaks".to_string(), row + 1),
+            (refresh, row + 2),
+            ("Settings".to_string(), row + 3),
+        ];
+        for (label, at) in labels {
             if y + ROW_H > LEGEND_TOP {
                 break;
             }
             if self.row == at {
                 sheet.rect(0, y, OUT_W, ROW_H, slot_ui::edge());
             }
-            sheet.text(label, 16, y, w, ROW_H, ROW_PX, false);
+            sheet.text(&label, 16, y, w, ROW_H, ROW_PX, false);
             y += pitch;
         }
         sheet.text(
-            "A PLAY    X ANOTHER    Y DONE    B BACK",
+            "A PLAY    X ANOTHER    Y DONE    R1 STREAKS    B BACK",
             16,
             LEGEND_TOP,
             OUT_W.saturating_sub(32),
@@ -296,6 +321,53 @@ impl PipMenu {
             ROW_PX,
             false,
         );
+    }
+
+    fn render_streaks(&self, sheet: &mut Sheet, pip: &Companion, w: u32) {
+        sheet.text("STREAKS", 16, 8, w, ROW_H, ROW_PX, false);
+        sheet.text(
+            &format!(
+                "All games  {} days  best {}",
+                pip.streak.current, pip.streak.longest
+            ),
+            16,
+            56,
+            w,
+            ROW_H,
+            ROW_PX,
+            false,
+        );
+        if pip.game_streaks.is_empty() {
+            sheet.text(
+                "A game starts its own streak once it has a mission.",
+                16,
+                108,
+                w,
+                ROW_H,
+                ROW_PX,
+                true,
+            );
+            return;
+        }
+        let mut y = 108u32;
+        for streak in &pip.game_streaks {
+            if y + ROW_H > LEGEND_TOP {
+                break;
+            }
+            sheet.text(
+                &format!(
+                    "{}  {}  {} days  best {}",
+                    streak.stem, streak.theme, streak.current, streak.best
+                ),
+                16,
+                y,
+                w,
+                ROW_H,
+                ROW_PX,
+                false,
+            );
+            y += ROW_PITCH;
+        }
     }
 
     fn render_history(&self, sheet: &mut Sheet, pip: &Companion, w: u32) {

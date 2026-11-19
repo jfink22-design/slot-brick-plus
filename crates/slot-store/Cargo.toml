@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+slot-cheevos = { path = "../slot-cheevos" }
 unicode-normalization.workspace = true
 crc32fast.workspace = true
 flate2.workspace = true
